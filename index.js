@@ -22,9 +22,7 @@ const client = new Client({
 
 // ⚙️ настройки ролей (emoji -> role ID)
 const roles = {
-    "👍": "ROLE_ID_1",
-    "🎮": "ROLE_ID_2",
-    "🔥": "ROLE_ID_3"
+    "👍": "1485734630228234286"
 };
 
 // сюда запишется ID сообщения
