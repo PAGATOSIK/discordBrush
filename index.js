@@ -25,13 +25,15 @@ const client = new Client({
 
 // ================== НАСТРОЙКИ ==================
 const roles = {
-    "👍": "1485734630228234286"
+    "👍": "1485734630228234286" // emoji => роль
 };
 
-const CAPTCHA_ROLE_ID = "1485734630228234286"; // роль за капчу (можешь заменить)
+const CAPTCHA_ROLE_ID = "1485734630228234286"; // роль капчи
 const captchaChannels = new Map(); // guildId -> channelId
-
 let reactionMessageId = null;
+
+// Канал для уведомлений о пользователях без капчи
+const NOTIFY_CHANNEL_ID = process.env.NOTIFY_CHANNEL_ID;
 
 // ================== SLASH КОМАНДЫ ==================
 const commands = [
@@ -41,10 +43,11 @@ const commands = [
 
 const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
 
+// ================== READY ==================
 client.once(Events.ClientReady, async () => {
     console.log(`✅ Запущен как ${client.user.tag}`);
 
-    // регистрация команд
+    // регистрация slash-команд
     try {
         await rest.put(
             Routes.applicationCommands(client.user.id),
@@ -55,12 +58,12 @@ client.once(Events.ClientReady, async () => {
         console.error(err);
     }
 
-    // сообщение с ролями (как у тебя)
+    // сообщение с ролями
     try {
         const channel = await client.channels.fetch(process.env.CHANNEL_ID);
 
         const message = await channel.send({
-            content: "🎭 **Выбери роль:**\n\n👍 — Игрок\n🎮 — Геймер\n🔥 — Актив"
+            content: "🎭 **Выбери роль:**\n\n👍 — Игрок"
         });
 
         reactionMessageId = message.id;
@@ -73,13 +76,19 @@ client.once(Events.ClientReady, async () => {
     } catch (err) {
         console.error("❌ Ошибка при отправке:", err);
     }
+
+    // ================== Авто-оповещение каждые час ==================
+    setInterval(() => {
+        client.guilds.cache.forEach(guild => {
+            notifyUnverifiedMembers(guild);
+        });
+    }, 60 * 60 * 1000); // 1 час
 });
 
 // ================== КОМАНДЫ ==================
 client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
-    // только владелец сервера
     if (interaction.user.id !== interaction.guild.ownerId) {
         return interaction.reply({ content: "❌ Только создатель может использовать эту команду", ephemeral: true });
     }
@@ -101,7 +110,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 });
 
-// ================== КАПЧА ==================
+// ================== ВСПОМОГАТЕЛЬНОЕ ==================
+function getEmojiKey(reaction) {
+    return reaction.emoji.id || reaction.emoji.name;
+}
+
+// ================== КАПЧА + РОЛИ ==================
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
     if (user.bot) return;
 
@@ -112,15 +126,17 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
         const guild = reaction.message.guild;
         if (!guild) return;
 
+        const emojiKey = getEmojiKey(reaction);
+
+        // ===== КАПЧА =====
         const captchaChannelId = captchaChannels.get(guild.id);
 
-        // если это канал капчи
         if (captchaChannelId && reaction.message.channel.id === captchaChannelId) {
             if (reaction.emoji.name !== "👍") return;
 
             const member = await guild.members.fetch(user.id);
-
             const role = guild.roles.cache.get(CAPTCHA_ROLE_ID);
+
             if (!role) return;
 
             await member.roles.add(role);
@@ -128,10 +144,10 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
             return;
         }
 
-        // ================== ТВОЯ СИСТЕМА РОЛЕЙ ==================
+        // ===== РОЛИ =====
         if (reaction.message.id !== reactionMessageId) return;
 
-        const roleId = roles[reaction.emoji.name];
+        const roleId = roles[emojiKey];
         if (!roleId) return;
 
         const member = await guild.members.fetch(user.id);
@@ -154,7 +170,8 @@ client.on(Events.MessageReactionRemove, async (reaction, user) => {
 
         if (reaction.message.id !== reactionMessageId) return;
 
-        const roleId = roles[reaction.emoji.name];
+        const emojiKey = getEmojiKey(reaction);
+        const roleId = roles[emojiKey];
         if (!roleId) return;
 
         const member = await reaction.message.guild.members.fetch(user.id);
@@ -165,5 +182,35 @@ client.on(Events.MessageReactionRemove, async (reaction, user) => {
         console.error("❌ Ошибка remove:", err);
     }
 });
+
+// ================== УВЕДОМЛЕНИЕ НЕПРОЙШЕДШИХ КАПЧУ ==================
+async function notifyUnverifiedMembers(guild) {
+    try {
+        const role = guild.roles.cache.get(CAPTCHA_ROLE_ID);
+        if (!role) return;
+
+        await guild.members.fetch();
+
+        const members = guild.members.cache.filter(member => 
+            !member.user.bot && !member.roles.cache.has(CAPTCHA_ROLE_ID)
+        );
+
+        if (members.size === 0) return;
+
+        const channel = await client.channels.fetch(NOTIFY_CHANNEL_ID);
+        if (!channel) return;
+
+        const mentions = members.map(m => `<@${m.id}>`).join(", ");
+
+        await channel.send({
+            content: `⏰ Пользователи, не прошедшие капчу:\n${mentions}`
+        });
+
+        console.log(`📢 Оповещено ${members.size} пользователей`);
+
+    } catch (err) {
+        console.error("❌ Ошибка notify:", err);
+    }
+}
 
 client.login(process.env.TOKEN);
